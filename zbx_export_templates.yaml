@@ -1,0 +1,77 @@
+zabbix_export:
+  version: '7.0'
+  template_groups:
+    - uuid: 6c3c375f67704721a3a846eff6828749
+      name: PING
+  templates:
+    - uuid: 4072d22cb8114bd58aeee15bdbd530bf
+      template: 'Ping from host device'
+      name: 'Ping from host device'
+      description: |
+        Monitors reachability of remote devices via ICMP ping, executed locally by Zabbix Agent 2 on a host that has network access to those devices. Intended for cases where the Zabbix server/proxy cannot reach the target network directly, but an agent on the boundary host can.
+        
+        INSTALLATION:
+        
+        1. On the Windows host running Zabbix Agent 2, add the following UserParameters to zabbix_agent2.conf (or a file included via Include=):
+        
+        
+        UserParameter=ping.discovery[*],powershell -NoProfile -Command "$hosts = '$1'.Split(','); $out = @{data=@()}; foreach($h in $hosts){$out.data += @{'{#HOST_IP}'=$h.Trim()}}; $out | ConvertTo-Json -Depth 3 -Compress"
+        
+        UserParameter=ping.check[*],powershell -NoProfile -Command "$target = '$1'; $t = \"Reply from $target`:\"; if(ping -n 1 -w 2000 $target | Select-String $t){1}else{0}"
+        
+        2. Restart the Zabbix Agent 2 service for the changes to take effect.
+        
+        3. In Zabbix, assign this template to the host representing that Windows agent.
+        
+        4. Set the {$PING_HOSTS} macro on that host to a comma-separated list of IP addresses to monitor, e.g.:
+           10.0.5.10,10.0.5.11,10.0.5.12
+        
+        5. Wait for the discovery rule to run (default interval: 1h), or trigger it manually via Configuration > Hosts > Discovery. Zabbix will automatically create one item, trigger, and graph per discovered IP address.
+        
+        6. To add or remove monitored devices later, edit only the {$PING_HOSTS} macro — no changes are needed on the agent or Zabbix server side.
+        
+        NOTES:
+        - Item timeout is overridden (10s) to accommodate PowerShell startup overhead; adjust if needed for your environment.
+        - Requires Zabbix Agent 2 with Zabbix agent (passive) checks allowed from the server/proxy to this host.
+      groups:
+        - name: PING
+      discovery_rules:
+        - uuid: c48f07f70e304d21a0e773920aa61a3f
+          name: 'Create monitored ip addreses'
+          key: 'ping.discovery["{$PING_HOSTS}"]'
+          delay: 1h
+          description: 'Requests the list of IP addresses defined in {$PING_HOSTS} (define in templates macro) from the Zabbix Agent 2 and returns them as LLD data ({#HOST_IP}), enabling automatic creation of monitoring items for each address without manual configuration.'
+          item_prototypes:
+            - uuid: c008d6d2b9f040d39e31446ebd082aae
+              name: 'Try to ping {#HOST_IP} from {HOST.HOST}'
+              key: 'ping.check[{#HOST_IP}]'
+              delay: '{$TIME_OF_ONE_CHECK}'
+              description: 'Executes a single ICMP ping to {#HOST_IP} from the agent host and returns 1 (reachable) or 0 (unreachable). Used to monitor availability of devices located in a network segment not directly accessible from the Zabbix server/proxy.'
+              timeout: 10s
+              trigger_prototypes:
+                - uuid: fcbb2a35bc4b4d7e91083b2cbbcdd231
+                  expression: 'max(/Ping from host device/ping.check[{#HOST_IP}],{$NUMBER_OF_CHECKS})=0'
+                  name: 'Device {#HOST_IP} is unreachable via ping from host {HOST.HOST}'
+                  event_name: 'Device {#HOST_IP} is unreachable via ping from host {HOST.HOST}'
+                  priority: AVERAGE
+                  description: 'Fires when {#HOST_IP} has been unreachable via ping for the last 10 checks in row (time of turning on: {$NUMBER_OF_CHECKS} * {$TIME_OF_ONE_CHECK} min), indicating a sustained connectivity loss rather than a single failure.'
+          graph_prototypes:
+            - uuid: 0236972a6c6048ecaa63aa78f9df32a1
+              name: 'Avalability of {#HOST_IP} via ping'
+              graph_items:
+                - color: 1A7C11
+                  calc_fnc: ALL
+                  item:
+                    host: 'Ping from host device'
+                    key: 'ping.check[{#HOST_IP}]'
+          timeout: 20s
+      macros:
+        - macro: '{$NUMBER_OF_CHECKS}'
+          value: '5'
+          description: 'Number of checks that must be unsucsesfull to throw warning that device is unpingable'
+        - macro: '{$PING_HOSTS}'
+          value: '10.152.12.77,10.152.12.78,8.8.8.8,10.152.12.69'
+          description: 'List of ip addreses, that we want to monitored by this template. Rewrite it to format: <ip address>,<ip address>'
+        - macro: '{$TIME_OF_ONE_CHECK}'
+          value: 1m
+          description: 'Time in minutes between ping is run (triger is fired when xxx ping in row are not succesfull)'
