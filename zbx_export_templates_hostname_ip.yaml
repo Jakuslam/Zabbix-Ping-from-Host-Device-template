@@ -23,11 +23,12 @@ zabbix_export:
         
         3. In Zabbix, assign this template to the host representing that Windows agent.
         
-        4. Set the {$PING_HOSTS} macro on that host to a list of devices in format ip,hostname / ip,hostname, e.g.:
-           10.0.5.10,Core-Switch / 10.0.5.11,Printer-2F / 10.0.5.12
-           The hostname part is optional; if omitted, the IP address is used as the name. Hostnames must not contain "/" or ",".
+        4. Set the {$PING_HOSTS} macro on that host to a list of devices in format:
+           ip,hostname / ip,hostname
+           e.g. 10.0.5.10,Core-Switch / 10.0.5.11,Printer-2F / 10.0.5.12
+           Works with default agent settings (no UnsafeUserParameters needed). The hostname part is optional; if omitted, the IP address is used as the name. Hostnames must not contain "/" or "," or restricted characters (\ ' " ` * ? [ ] { } ~ $ ! & ; ( ) < > | # @).
         
-        5. Wait for the discovery rule to run (default interval: 1h), or trigger it manually via Configuration > Hosts > Discovery. Zabbix will automatically create one item, trigger, and graph per discovered device.
+        5. Wait for the discovery rule to run (default interval: 1h), or trigger it manually via Configuration > Hosts > Discovery. Zabbix will automatically create one item, trigger, and graph per discovered device, named after its hostname.
         
         6. To add or remove monitored devices later, edit only the {$PING_HOSTS} macro — no changes are needed on the agent or Zabbix server side.
         
@@ -41,21 +42,30 @@ zabbix_export:
           name: 'Create monitored ip addresses'
           key: 'ping.discoveryIpHost["{$PING_HOSTS}"]'
           delay: 1h
-          description: 'Requests the list of devices defined in {$PING_HOSTS} (format: ip,hostname / ip,hostname) from the Zabbix Agent 2 and returns them as LLD data ({#HOST_IP}, {#HOST_NAME}), enabling automatic creation of monitoring items for each address without manual configuration.'
+          description: 'Requests the list of devices defined in {$PING_HOSTS} (format: ip,hostname / ip,hostname) from the Zabbix Agent 2 and returns them as LLD data ({#HOST_IP}, {#HOST_NAME}), enabling automatic creation of monitoring items for each device without manual configuration.'
           item_prototypes:
             - uuid: 587ceb6600394c4b8ef876e0ac4bf654
-              name: 'Try to ping {#HOST_NAME} {#HOST_IP}'
+              name: 'Ping {#HOST_NAME} {#HOST_IP}'
               key: 'ping.check[{#HOST_IP}]'
-              delay: '{$TIME_OF_ONE_CHECK}'
               description: 'Executes a single ICMP ping to {#HOST_NAME} {#HOST_IP} from the agent host and returns 1 (reachable) or 0 (unreachable). Used to monitor availability of devices located in a network segment not directly accessible from the Zabbix server/proxy.'
               timeout: 10s
+              tags:
+                - tag: device
+                  value: '{#HOST_NAME}'
+                - tag: ip
+                  value: '{#HOST_IP}'
               trigger_prototypes:
                 - uuid: 8d6a79f90a0047629dfe90c8b6b99a53
-                  expression: 'max(/Ping from host device - hostname and ip address/ping.check[{#HOST_IP}],{$NUMBER_OF_CHECKS})=0'
+                  expression: 'max(/Ping from host device - hostname and ip address/ping.check[{#HOST_IP}],15m)=0'
+                  recovery_mode: RECOVERY_EXPRESSION
+                  recovery_expression: 'min(/Ping from host device - hostname and ip address/ping.check[{#HOST_IP}],15m)=1'
                   name: 'Device {#HOST_NAME} {#HOST_IP} is unreachable via ping from host {HOST.HOST}'
                   event_name: 'Device {#HOST_NAME} {#HOST_IP} is unreachable via ping from host {HOST.HOST}'
-                  priority: AVERAGE
+                  priority: INFO
                   description: 'Fires when {#HOST_NAME} {#HOST_IP} has been unreachable via ping for the last 10 checks in row (time of turning on: {$NUMBER_OF_CHECKS} * {$TIME_OF_ONE_CHECK} min), indicating a sustained connectivity loss rather than a single failure.'
+                  tags:
+                    - tag: device
+                      value: '{#HOST_NAME}'
           graph_prototypes:
             - uuid: d3c25da83104430b802f111a83f876b6
               name: 'Availability of {#HOST_NAME} {#HOST_IP} via ping'
@@ -72,7 +82,7 @@ zabbix_export:
           description: 'Number of checks that must be unsucsesfull to throw warning that device is unpingable'
         - macro: '{$PING_HOSTS}'
           value: '10.152.12.77,Device-77 / 10.152.12.78,Device-78 / 8.8.8.8,Google-DNS / 10.152.12.69,Device-69'
-          description: 'List of devices, that we want to monitored by this template. Rewrite it to format: <ip address>,<hostname> / <ip address>,<hostname> (hostname is optional)'
+          description: 'Devices to monitor. Format: ip,hostname / ip,hostname (hostname optional; IP is used if omitted).'
         - macro: '{$TIME_OF_ONE_CHECK}'
           value: 1m
           description: 'Time in minutes between ping is run (triger is fired when xxx ping in row are not succesfull)'
